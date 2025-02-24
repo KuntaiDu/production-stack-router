@@ -1,8 +1,8 @@
 
 from prefix_matcher.simhash_matcher import SimhashMatcher
-from prefix_matcher.lcp_matcher import LCPMatcher, HashTrie
-from unavailable_endpoints_detector.numreq_detector import NumReqUnavailableEndpointsDetector
-from unavailable_endpoints_detector.base import EndpointStatus
+from prefix_matcher.hashtrie_matcher import HashTrieMatcher, HashTrie
+from load_balancer.numreq_detector import NumReqLoadBalancer
+from load_balancer.base import EndpointStatus
 from typing import Set
 import json
 import random
@@ -11,7 +11,7 @@ import logging
 import numpy as np
 
 # hyper-parameters
-router_class = LCPMatcher
+router_class = SimhashMatcher
 dataset_size = 2200
 num_running_requests_threshold = 400
 minimum_endpoints = dataset_size // num_running_requests_threshold
@@ -25,7 +25,7 @@ class Router:
 
     def __init__(self, endpoints: Set[str], num_running_requests_threshold: int = num_running_requests_threshold):
         self.matcher = router_class()
-        self.unavailable_endpoints_detector = NumReqUnavailableEndpointsDetector(num_running_requests_threshold=num_running_requests_threshold)
+        self.unavailable_endpoints_detector = NumReqLoadBalancer(num_running_requests_threshold=num_running_requests_threshold)
 
         self.endpoint_to_status = {endpoint: EndpointStatus(num_running_requests=0) for endpoint in endpoints}
         self.matcher.add_endpoints(endpoints)
@@ -33,7 +33,7 @@ class Router:
     def route(self, text: str) -> str:
 
         # This should be done periodically in a separate coroutine. But for the sake of testing let's just do it here.
-        unavailable_endpoints = self.unavailable_endpoints_detector.detect(self.endpoint_to_status)
+        unavailable_endpoints = self.unavailable_endpoints_detector.get_unavailable_endpoints(self.endpoint_to_status)
 
         endpoint = self.matcher.match(text, unavailable_endpoints)
 
@@ -141,8 +141,9 @@ if __name__ == "__main__":
     request_endpoint = {}
     total_same_prefix_requests = 0
     routed_same_prefix_requests = 0
+    request_length = []
     for i in tqdm(list(range(dataset_size))):
-        req = f"{str(i)} " + "Hi " * tokens_typed_by_user_per_request
+        req = f"{str(i)} " + "Absolutely! " * tokens_typed_by_user_per_request
         if random.random() < continue_chat_probability:
             idx = random.randint(0, len(requests) - 1)
             req = requests[idx] + "\n" + req
@@ -152,19 +153,21 @@ if __name__ == "__main__":
             req = CHATGPT_PREFIX + "\n" + req
             request_parent[i] = -1
         requests.append(req)
+        request_length.append(len(req))
     request_endpoint[-1] = None
     logger.info("Requests generated.")
 
-
+    logger.info("Request length: mean: %.2f, std: %.2f", np.array(request_length).mean(), np.array(request_length).std())
+    
     # Build endpoints and router
     endpoints = set(['localhost:%d' % (port) for port in range(8000, 8000 + num_endpoints)])
     router = Router(endpoints, num_running_requests_threshold)
     endpoint_to_hashtrie = {endpoint: HashTrie() for endpoint in endpoints}
     endpoint_load = {endpoint: [] for endpoint in endpoints}
 
-    # warmup each engine with common prefix.
-    for endpoint in endpoints:
-        router.update(CHATGPT_PREFIX, endpoint)
+    # # warmup each engine with common prefix.
+    # for endpoint in endpoints:
+    #     router.update(CHATGPT_PREFIX, endpoint)
 
     # Route requests
     for idx, request in enumerate(tqdm(requests)):
@@ -173,9 +176,9 @@ if __name__ == "__main__":
         request_endpoint[idx] = endpoint
         router.update(request, endpoint)
 
-        cachemiss_length = len(request) - endpoint_to_hashtrie[endpoint].longest_prefix_match(request)
+        cachemiss_length = len(request) - endpoint_to_hashtrie[endpoint].longest_prefix_match(request)[0]
 
-        endpoint_to_hashtrie[endpoint].insert(request)
+        endpoint_to_hashtrie[endpoint].insert(request, endpoint)
         endpoint_load[endpoint].append(cachemiss_length)
 
         if request_endpoint[idx] == request_endpoint[request_parent[idx]]:

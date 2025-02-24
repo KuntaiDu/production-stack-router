@@ -50,3 +50,5 @@ The unavailable endpoints detector identifies overloaded endpoints that should n
 - `continue_chat_probability`: Probability that a new request continues an existing conversation (default: 0.2)
 - `tokens_typed_by_user_per_request`: Number of tokens in each simulated user request (default: 100)
 
+
+python router.py --routing-logic LCP --routing-logic "{}" --overload-detector max_kv_cache --unavaiable-endpoint-detector-config "{}"
