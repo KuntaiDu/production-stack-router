@@ -11,9 +11,11 @@ import logging
 import numpy as np
 
 # hyper-parameters
+router_class = LCPMatcher
 dataset_size = 2200
 num_running_requests_threshold = 400
 minimum_endpoints = dataset_size // num_running_requests_threshold
+num_endpoints = 2 * minimum_endpoints
 continue_chat_probability = 0.2
 tokens_typed_by_user_per_request = 100
 random.seed(42)
@@ -22,7 +24,7 @@ random.seed(42)
 class Router:
 
     def __init__(self, endpoints: Set[str], num_running_requests_threshold: int = num_running_requests_threshold):
-        self.matcher = LCPMatcher()
+        self.matcher = router_class()
         self.unavailable_endpoints_detector = NumReqUnavailableEndpointsDetector(num_running_requests_threshold=num_running_requests_threshold)
 
         self.endpoint_to_status = {endpoint: EndpointStatus(num_running_requests=0) for endpoint in endpoints}
@@ -39,7 +41,7 @@ class Router:
 
     def update(self, text: str, endpoint: str) -> None:
         self.endpoint_to_status[endpoint].num_running_requests += 1
-        self.matcher.routed(text, endpoint)
+        self.matcher.update(text, endpoint)
 
 
 # The system prompt for ChatGPT
@@ -135,18 +137,27 @@ if __name__ == "__main__":
     # Assuming that the user continues the conversation with a new request
     # with probability continue_chat_probability.
     requests = []
+    request_parent = {}
+    request_endpoint = {}
+    total_same_prefix_requests = 0
+    routed_same_prefix_requests = 0
     for i in tqdm(list(range(dataset_size))):
         req = f"{str(i)} " + "Hi " * tokens_typed_by_user_per_request
         if random.random() < continue_chat_probability:
-            req = random.choice(requests) + "\n" + req
+            idx = random.randint(0, len(requests) - 1)
+            req = requests[idx] + "\n" + req
+            request_parent[i] = idx
+            total_same_prefix_requests += 1
         else:
             req = CHATGPT_PREFIX + "\n" + req
+            request_parent[i] = -1
         requests.append(req)
+    request_endpoint[-1] = None
     logger.info("Requests generated.")
 
 
     # Build endpoints and router
-    endpoints = set(['localhost:%d' % (port) for port in range(8000, 8000 + 2*minimum_endpoints)])
+    endpoints = set(['localhost:%d' % (port) for port in range(8000, 8000 + num_endpoints)])
     router = Router(endpoints, num_running_requests_threshold)
     endpoint_to_hashtrie = {endpoint: HashTrie() for endpoint in endpoints}
     endpoint_load = {endpoint: [] for endpoint in endpoints}
@@ -156,9 +167,10 @@ if __name__ == "__main__":
         router.update(CHATGPT_PREFIX, endpoint)
 
     # Route requests
-    for request in tqdm(requests):
+    for idx, request in enumerate(tqdm(requests)):
 
         endpoint = router.route(request)
+        request_endpoint[idx] = endpoint
         router.update(request, endpoint)
 
         cachemiss_length = len(request) - endpoint_to_hashtrie[endpoint].longest_prefix_match(request)
@@ -166,19 +178,13 @@ if __name__ == "__main__":
         endpoint_to_hashtrie[endpoint].insert(request)
         endpoint_load[endpoint].append(cachemiss_length)
 
-    # Print per-endpoint stats
-    # for endpoint in endpoints: 
-    #     logger.info("Endpoint: %s, Nreq: %d, Avg. length of cache-missed part of requests: %s",
-    #         endpoint, 
-    #         len(endpoint_load[endpoint]),
-    #         str(sum(endpoint_load[endpoint]) / len(endpoint_load[endpoint])) if len(endpoint_load[endpoint]) > 0 else "N/A"
-    #     )
+        if request_endpoint[idx] == request_endpoint[request_parent[idx]]:
+            routed_same_prefix_requests += 1
 
     load = np.array([len(endpoint_load[endpoint]) for endpoint in endpoint_load])
-    print(load)
-    logger.info("Nreq per endpoint: mean %.2f, std %.2f", load.mean(), load.std())
+    logger.info("Nreq distribution: %s", load)
     miss_length = np.array(sum([endpoint_load[endpoint] for endpoint in endpoint_load], []))
     logger.info("Cache-miss length: mean: %.2f, std: %.2f", miss_length.mean(), miss_length.std())
 
-
+    logger.info("%d out of %d share-prefix requests were routed to the same endpoint", routed_same_prefix_requests, total_same_prefix_requests)
 

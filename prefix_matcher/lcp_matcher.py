@@ -12,7 +12,7 @@ class TrieNode:
         self.is_end = False
 
 class HashTrie:
-    def __init__(self, chunk_size: int = 64):
+    def __init__(self, chunk_size: int = 32):
         self.root = TrieNode()
         self.chunk_size = chunk_size
 
@@ -46,7 +46,7 @@ class HashTrie:
 
 
 class LCPMatcher(BasePrefixMatcher):
-    def __init__(self, chunk_size: int = 64):
+    def __init__(self, chunk_size: int = 32):
         self.endpoint_to_trie = {}
         self.chunk_size = chunk_size
         self.logger = logging.getLogger("LCPMatcher")
