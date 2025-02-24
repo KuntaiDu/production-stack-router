@@ -1,32 +1,45 @@
 
 from prefix_matcher.simhash_matcher import SimhashMatcher
+from prefix_matcher.lcp_matcher import LCPMatcher, HashTrie
 from unavailable_endpoints_detector.numreq_detector import NumReqUnavailableEndpointsDetector
 from unavailable_endpoints_detector.base import EndpointStatus
 from typing import Set
 import json
 import random
+from tqdm import tqdm
+import logging
+import numpy as np
+
+# hyper-parameters
+dataset_size = 2200
+num_running_requests_threshold = 400
+minimum_endpoints = dataset_size // num_running_requests_threshold
+continue_chat_probability = 0.2
+tokens_typed_by_user_per_request = 100
+random.seed(42)
 
 
 class Router:
 
-    def __init__(self, endpoints: Set[str], num_running_requests_threshold: int = 100):
-        self.matcher = SimhashMatcher()
+    def __init__(self, endpoints: Set[str], num_running_requests_threshold: int = num_running_requests_threshold):
+        self.matcher = LCPMatcher()
         self.unavailable_endpoints_detector = NumReqUnavailableEndpointsDetector(num_running_requests_threshold=num_running_requests_threshold)
 
         self.endpoint_to_status = {endpoint: EndpointStatus(num_running_requests=0) for endpoint in endpoints}
+        self.matcher.add_endpoints(endpoints)
 
     def route(self, text: str) -> str:
 
         # This should be done periodically in a separate coroutine. But for the sake of testing let's just do it here.
-        unavailable_endpoints = self.unavailable_endpoints_detector.detect(self.endpoints_to_status)
+        unavailable_endpoints = self.unavailable_endpoints_detector.detect(self.endpoint_to_status)
 
         endpoint = self.matcher.match(text, unavailable_endpoints)
 
-        self.endpoint_to_status[endpoint].num_running_requests += 1
-
         return endpoint
 
-
+    def update(self, text: str, endpoint: str) -> None:
+        self.endpoint_to_status[endpoint].num_running_requests += 1
+        self.matcher.routed(text, endpoint)
 
 
 # The system prompt for ChatGPT
@@ -114,35 +127,58 @@ The `web` tool has the following commands:
 
 if __name__ == "__main__":
 
-    # hyper-parameters
-    dataset_size = 1000
-    num_running_requests_threshold = 100
-    minimum_endpoints = dataset_size // num_running_requests_threshold
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("test_router")
 
-    random.seed(42)
-
-    # load ShareGPT dataset
-    dataset = json.load(open("sharegpt_dataset.json"))
-    # subsample dataset
-    dataset = random.sample(dataset, dataset_size)
-
-    # generate requests
+    # generate fake requests.
+    # Each user types 100 tokens per request.
+    # Assuming that the user continues the conversation with a new request
+    # with probability continue_chat_probability.
     requests = []
-    for data in dataset:
-        conversations = data['conversations']
-        requests.append(CHATGPT_PREFIX + '\n' + '\n'.join([conversations[i]['value'] for i in range(len(conversations))]))
+    for i in tqdm(list(range(dataset_size))):
+        req = f"{str(i)} " + "Hi " * tokens_typed_by_user_per_request
+        if random.random() < continue_chat_probability:
+            req = random.choice(requests) + "\n" + req
+        else:
+            req = CHATGPT_PREFIX + "\n" + req
+        requests.append(req)
+    logger.info("Requests generated.")
 
 
     # Build endpoints and router
     endpoints = set(['localhost:%d' % (port) for port in range(8000, 8000 + 2*minimum_endpoints)])
     router = Router(endpoints, num_running_requests_threshold)
-    endpoint_to_requests = {endpoint: [] for endpoint in endpoints}
+    endpoint_to_hashtrie = {endpoint: HashTrie() for endpoint in endpoints}
+    endpoint_load = {endpoint: [] for endpoint in endpoints}
+
+    # warmup each engine with common prefix.
+    for endpoint in endpoints:
+        router.update(CHATGPT_PREFIX, endpoint)
 
     # Route requests
-    for request in requests:
+    for request in tqdm(requests):
 
-        # get prefix matching length
-        endpoint_to_requests[router.route(request)].append(request)
+        endpoint = router.route(request)
+        router.update(request, endpoint)
+
+        cachemiss_length = len(request) - endpoint_to_hashtrie[endpoint].longest_prefix_match(request)
+
+        endpoint_to_hashtrie[endpoint].insert(request)
+        endpoint_load[endpoint].append(cachemiss_length)
+
+    # Print per-endpoint stats
+    # for endpoint in endpoints: 
+    #     logger.info("Endpoint: %s, Nreq: %d, Avg. length of cache-missed part of requests: %s",
+    #         endpoint, 
+    #         len(endpoint_load[endpoint]),
+    #         str(sum(endpoint_load[endpoint]) / len(endpoint_load[endpoint])) if len(endpoint_load[endpoint]) > 0 else "N/A"
+    #     )
+
+    load = np.array([len(endpoint_load[endpoint]) for endpoint in endpoint_load])
+    print(load)
+    logger.info("Nreq per endpoint: mean %.2f, std %.2f", load.mean(), load.std())
+    miss_length = np.array(sum([endpoint_load[endpoint] for endpoint in endpoint_load], []))
+    logger.info("Cache-miss length: mean: %.2f, std: %.2f", miss_length.mean(), miss_length.std())
 
 
-    
+

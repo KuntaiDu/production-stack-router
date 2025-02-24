@@ -1,3 +1,4 @@
 uhashring
 simhash
 xxhash
+tqdm

@@ -58,7 +58,7 @@ class SimhashMatcher(BasePrefixMatcher):
 
         raise ValueError(f"No endpoint found for text: {text}")
 
-    def routed(self, text: str, endpoint: str) -> None:
+    def update(self, text: str, endpoint: str) -> None:
         # In simhash matcher the endpoint state is irrelevant to which request
         # is routed to which endpoint.
         pass

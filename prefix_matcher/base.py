@@ -3,8 +3,9 @@
     It implements four methods:
     1. match(text: str, unavailable_endpoints: Set[str]) -> str
         -- It returns one endpoint in endpoints that best matches the text.
-    2. routed(text: str, endpoint: str) -> None
-        -- It tells the matcher that the text is routed to the given endpoint.
+    2. update(text: str, endpoint: str) -> None
+        -- It updates the matcher state by telling it that the given text is
+           routed to the given endpoint.
     3. add_endpoints(endpoints: Set[str]) -> None
         -- It adds new endpoints to the matcher.
     4. remove_endpoints(endpoints: Set[str]) -> None
@@ -20,7 +21,7 @@ class BasePrefixMatcher(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def routed(self, text: str, endpoint: str) -> None:
+    def update(self, text: str, endpoint: str) -> None:
         pass
 
     @abc.abstractmethod

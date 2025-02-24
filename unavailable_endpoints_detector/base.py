@@ -1,9 +1,10 @@
 
 from dataclasses import dataclass
-from typing import Set
+from typing import Set, Dict
+import abc
 
 @dataclass
-class EngineStats:
+class EndpointStatus:
     # Number of running requests
     num_running_requests: int = 0
 

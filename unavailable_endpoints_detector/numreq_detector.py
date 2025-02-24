@@ -1,5 +1,5 @@
 
-from typing import Set
+from typing import Set, Dict
 from .base import EndpointStatus, BaseUnavailableEndpointsDetector
 
 class NumReqUnavailableEndpointsDetector(BaseUnavailableEndpointsDetector):
